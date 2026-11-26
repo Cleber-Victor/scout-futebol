@@ -1,6 +1,21 @@
-# Scout de Futebol: Euro 2024
+# Scout de Futebol em Linguagem Natural: Euro 2024
 
-Pipeline de dados que transforma os eventos da **Euro 2024**, que a StatsBomb disponibiliza abertamente, numa tabela de scout com **uma linha por jogador**. A tabela traz minutos jogados, posição principal, contagens (passes, cruzamentos, chutes, gols, dribles), métricas por 90 minutos e taxas de acerto, e fica num banco DuckDB pronto para consultas em SQL.
+O objetivo é um scout que responde a perguntas em português, como *"me ache um lateral sub-23 que cruza bem e custa pouco"*. Um LLM transforma a pergunta numa consulta SQL. Essa consulta roda sobre uma tabela de jogadores montada a partir de dados abertos, e a resposta sai validada.
+
+> 🚧 **Em construção.** Hoje o projeto tem a base de dados: a tabela de jogadores com métricas por 90 minutos. As próximas etapas estão no [roadmap](#roadmap).
+
+## Roadmap
+
+1. ✅ **Exploração** dos eventos da StatsBomb (`explorar.py`)
+2. ✅ **Tabela de jogadores** com métricas por 90 minutos no DuckDB (`baixar.py`, `montar_tabela.py`)
+3. 🔄 **Idade e valor de mercado** do Transfermarkt, medidos na data do torneio e cruzados com a StatsBomb pelo nome dos jogadores (*entity resolution*)
+4. ⬜ **Agente text-to-SQL:** pergunta → LLM gera o SQL → DuckDB executa em modo somente leitura → saída validada com Pydantic, com nova tentativa quando falha
+5. ⬜ **Avaliação** com cerca de 20 perguntas de scout de resposta conhecida, medindo a taxa de acerto
+6. ⬜ **Interface** simples em Streamlit
+
+## Base de dados (etapas 1 e 2)
+
+O pipeline transforma os eventos da **Euro 2024**, que a StatsBomb disponibiliza abertamente, numa tabela de scout com **uma linha por jogador**. A tabela traz minutos jogados, posição principal, contagens (passes, cruzamentos, chutes, gols, dribles), métricas por 90 minutos e taxas de acerto.
 
 ```
 StatsBomb Open Data ──► baixar.py ──► data/*.parquet ──► montar_tabela.py ──► scout.duckdb
@@ -69,6 +84,7 @@ Os dados (`data/` e `scout.duckdb`) não vão para o repositório. Para recriá-
 - **Disputa de pênaltis** (`period = 5`): fica fora dos minutos e dos gols.
 - **Passe certo:** na StatsBomb, `pass_outcome` vazio quer dizer passe completo. Quando o passe erra, o campo traz o motivo, como `Incomplete` ou `Out`.
 - **Cruzamento:** passe com `pass_cross = True`.
+- **Conferência com um caso conhecido:** o goleiro titular da Inglaterra, Jordan Pickford, jogou todas as partidas inteiras. A tabela registra 7 jogos e 713 minutos para ele: 7 × 90 = 630, mais duas prorrogações (60) e os acréscimos.
 
 ## Fonte dos dados
 
