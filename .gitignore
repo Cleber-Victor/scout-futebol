@@ -1,0 +1,14 @@
+# Ambiente
+.venv/
+__pycache__/
+*.pyc
+
+# Dados gerados (recrie com baixar.py e montar_tabela.py)
+data/
+*.duckdb
+*.duckdb.wal
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
