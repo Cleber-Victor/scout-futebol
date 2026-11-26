@@ -12,3 +12,6 @@ data/
 .vscode/
 .idea/
 .DS_Store
+
+# Notas pessoais de contexto para o Claude Code
+CLAUDE.md
