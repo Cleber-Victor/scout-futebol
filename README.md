@@ -2,19 +2,27 @@
 
 O objetivo é um scout que responde a perguntas em português, como *"me ache um lateral sub-23 que cruza bem e custa pouco"*. Um LLM transforma a pergunta numa consulta SQL. Essa consulta roda sobre uma tabela de jogadores montada a partir de dados abertos, e a resposta sai validada.
 
-> 🚧 **Em construção.** A base de dados está pronta: uma tabela de jogadores com métricas por 90 minutos, idade e valor de mercado na data do torneio. O próximo passo é o agente text-to-SQL ([roadmap](#roadmap)).
+> 🚧 **Em construção.** A base de dados e o agente text-to-SQL já funcionam. Faltam a avaliação sistemática e a interface ([roadmap](#roadmap)).
 
-### A pergunta, respondida à mão
+### Exemplo
 
-*"Me ache um lateral sub-23 que cruza bem e custa pouco."* Hoje essa pergunta é respondida com o SQL abaixo. Gerar esse SQL a partir da frase em português é o trabalho do agente da etapa 4.
+```
+$ python agente.py "me ache um lateral sub-23 que cruza bem e custa pouco"
+```
+
+O agente (Gemini) gerou este SQL a partir da frase:
 
 ```sql
-SELECT nome, selecao, idade, minutos, cruzamentos_certos_p90, valor_mercado_eur
+SELECT nome, selecao, posicao_principal, idade, minutos, cruzamentos_certos_p90,
+       taxa_acerto_cruzamento, valor_mercado_eur
 FROM jogadores_completo
 WHERE posicao_principal IN ('Left Back', 'Right Back', 'Left Wing Back', 'Right Wing Back')
   AND idade < 23 AND minutos >= 180
-ORDER BY cruzamentos_certos_p90 DESC
+ORDER BY cruzamentos_certos_p90 DESC NULLS LAST
+LIMIT 10
 ```
+
+Ele traduziu "lateral" para as 4 posições exatas, "sub-23" para `idade < 23` e "cruza bem" para cruzamentos certos por 90 minutos, com um mínimo de minutos em campo. "Custa pouco" virou uma coluna de valor para comparar, em vez de um teto inventado.
 
 | Jogador | Seleção | Idade | Minutos | Cruz. certos /90 | Valor (jun/2024) |
 |---|---|---:|---:|---:|---:|
@@ -31,7 +39,7 @@ O Zalewski acerta mais que o dobro de cruzamentos por 90 minutos do que o segund
 1. ✅ **Exploração** dos eventos da StatsBomb (`explorar.py`)
 2. ✅ **Tabela de jogadores** com métricas por 90 minutos no DuckDB (`baixar.py`, `montar_tabela.py`)
 3. ✅ **Idade e valor de mercado** do Transfermarkt, medidos na data do torneio e cruzados com a StatsBomb pelo nome dos jogadores (*entity resolution*, `juntar_transfermarkt.py`)
-4. ⬜ **Agente text-to-SQL:** pergunta → LLM gera o SQL → DuckDB executa em modo somente leitura → saída validada com Pydantic, com nova tentativa quando falha
+4. ✅ **Agente text-to-SQL:** pergunta → LLM gera o SQL → saída validada com Pydantic → DuckDB executa em modo somente leitura, e os erros voltam para o LLM corrigir (`agente.py`, `llm.py`)
 5. ⬜ **Avaliação** com cerca de 20 perguntas de scout de resposta conhecida, medindo a taxa de acerto
 6. ⬜ **Interface** simples em Streamlit
 
@@ -80,7 +88,19 @@ curl -L -o data/player_valuations.csv.gz "$URL/player_valuations.csv.gz"
 python juntar_transfermarkt.py   # casa os jogadores e cria jogadores_completo
 ```
 
-Depois disso, dá para consultar o banco direto:
+Para o agente, crie um arquivo `.env` na raiz com a sua chave do Gemini, que é gratuita em [aistudio.google.com/apikey](https://aistudio.google.com/apikey). O `.env` já está no `.gitignore`.
+
+```bash
+GEMINI_API_KEY=sua-chave
+MODELO_LLM=gemini-3.5-flash
+```
+
+```bash
+python agente.py                          # modo interativo
+python agente.py "quem fez mais gols?"    # uma pergunta só
+```
+
+Também dá para consultar o banco direto, sem o agente:
 
 ```python
 import duckdb
@@ -96,6 +116,8 @@ con.sql("SELECT nome, selecao, idade, gols, valor_mercado_eur FROM jogadores_com
 | [`baixar.py`](baixar.py) | Baixa jogos, eventos e escalações de toda a competição e salva em Parquet |
 | [`montar_tabela.py`](montar_tabela.py) | Usa SQL no DuckDB para montar a tabela de jogadores |
 | [`juntar_transfermarkt.py`](juntar_transfermarkt.py) | Casa cada jogador com o seu registro no Transfermarkt e acrescenta idade e valor de mercado |
+| [`agente.py`](agente.py) | Agente text-to-SQL: monta o prompt, valida a saída do LLM, executa o SQL com segurança e corrige erros |
+| [`llm.py`](llm.py) | Único arquivo que conhece o provedor do LLM. Trocar de provedor é mudar só este arquivo |
 
 Os dados (`data/` e `scout.duckdb`) não vão para o repositório. Para recriá-los, rode os scripts.
 
@@ -152,6 +174,54 @@ Problemas encontrados no caminho e como foram resolvidos:
 - **Grafias do país:** o Transfermarkt usa tanto "Turkey" quanto "Türkiye".
 - **Sem vazamento temporal:** a idade e o valor são os de junho de 2024, não os atuais. A idade conta aniversários completos, e por isso o Nico Williams, que fez 22 anos durante o torneio, aparece com 21. O valor vem de um `ASOF JOIN`, que pega a última avaliação antes da abertura.
 - **Conferências automáticas:** o script para com erro se Gakpo, Nico Williams e Yamal não tiverem as idades conhecidas (25, 21 e 16), se o mais velho não tiver 41 anos (Pepe) ou se algum jogador for casado duas vezes.
+
+## Agente text-to-SQL (etapa 4)
+
+```
+pergunta ──► LLM gera JSON {sql, explicacao} ──► Pydantic valida ──► DuckDB executa ──► resultado
+                 ▲                                      │                  │
+                 └──────── o erro volta para o LLM ◄────┴──────────────────┘
+                           (até 3 tentativas)
+```
+
+### O prompt
+
+O prompt dá ao LLM o que ele não tem como adivinhar sozinho:
+
+- **O schema, lido do próprio banco:** as colunas com seus tipos e as 23 posições que existem nos dados. Se a tabela mudar, o prompt acompanha.
+- **O vocabulário de posições:** cada termo em português corresponde a uma lista exata de posições (`"lateral" = posicao_principal IN ('Left Back', ...)`). O `LIKE '%Back'` fica proibido, porque os zagueiros também terminam em "Back".
+- **As regras de scout, com cortes escolhidos a partir dos dados:**
+  - "Faz X bem" usa a métrica por 90 minutos com `minutos >= 180`, que equivale a 2 jogos inteiros (a mediana do torneio é 192 minutos).
+  - Taxas de acerto exigem um mínimo de tentativas, para que 1 cruzamento certo em 1 tentado não apareça como 100%.
+  - "Barato" sem número não vira um teto inventado.
+  - `LIMIT 1` é proibido, porque esconde empates.
+- **Nenhuma resposta de teste no prompt:** as regras não citam as respostas das perguntas de avaliação, para que o acerto meça o agente e não a cola.
+
+### Segurança em camadas
+
+O SQL vem de um modelo e precisa ser tratado como entrada não confiável:
+
+| Camada | O que bloqueia |
+|---|---|
+| Validação com Pydantic | Qualquer coisa que não comece com `SELECT`/`WITH`, e várias instruções (`SELECT ...; DROP ...`) |
+| `read_only=True` no DuckDB | Escrita: `DROP`, `INSERT`, `UPDATE`, `CREATE` |
+| `enable_external_access=False` | Leitura de arquivos do disco ou da internet (`SELECT * FROM '/etc/passwd'`) |
+| `fetchmany(50)` | Resultados gigantes, mesmo que o LLM esqueça o `LIMIT` |
+
+### Correção automática de erros
+
+Quando o JSON é inválido ou o SQL falha, a mensagem de erro volta para o LLM. Por exemplo, o DuckDB responde `column "idade_anos" not found. Candidate bindings: "idade"`, e o modelo corrige na tentativa seguinte. Tentar de novo sem mostrar o erro, com temperatura 0, repetiria exatamente o mesmo SQL. Erros de rede ou da API não voltam para o LLM, porque reescrever o SQL não resolve um servidor fora do ar.
+
+### Primeiros testes
+
+| Pergunta | Resposta esperada | Agente |
+|---|---|---|
+| Quem fez mais gols? | 6 empatados com 3 gols (a artilharia foi dividida) | ✅ os 6, com `WHERE gols = (SELECT max(gols) ...)` |
+| Quantos laterais sub-23 jogaram? | 9 | ✅ |
+| Quem é o jogador mais novo? | Lamine Yamal, 16 anos | ✅ |
+| Lateral sub-23 que cruza bem e custa pouco | Zalewski no topo | ✅ o mesmo SQL escrito à mão |
+
+A etapa 5 amplia esses testes para cerca de 20 perguntas e mede a taxa de acerto.
 
 ## Fonte dos dados
 
