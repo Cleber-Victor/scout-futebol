@@ -15,3 +15,6 @@ data/
 
 # Notas pessoais de contexto para o Claude Code
 CLAUDE.md
+
+# Segredos (chave da API)
+.env
