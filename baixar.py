@@ -40,6 +40,7 @@ for match_id in jogos["match_id"]:
                     "time": time,
                     "player_id": jogador["player_id"],
                     "player_name": jogador["player_name"],
+                    "player_nickname": jogador["player_nickname"],  # "Cody Gakpo": nome usado no Transfermarkt
                     "position": pos["position"],
                     "from": pos["from"],
                     "to": pos["to"],  # None = ficou até o fim
